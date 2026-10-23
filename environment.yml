@@ -1,0 +1,19 @@
+name: uma_align
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy=1.24
+  - pandas=2.3
+  - scipy=1.15
+  - matplotlib=3.10
+  - scikit-image=0.25
+  - pillow
+  - openpyxl
+  - openjdk=17
+  - maven
+  - pip
+  - pip:
+      - orientationpy==0.3.1
+      - pyimagej==1.5.0
+      - scyjava==1.12.5

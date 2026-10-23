@@ -1,0 +1,13 @@
+data/
+results/
+logs/
+figure/
+*.npz
+*.rds
+*.tif
+*.czi
+__pycache__/
+.Rhistory
+.RData
+.Rproj.user/
+.DS_Store

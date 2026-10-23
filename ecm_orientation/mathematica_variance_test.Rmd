@@ -1,0 +1,74 @@
+---
+title: "mathematica_variance_test"
+output: html_document
+date: "2026-02-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+proCAF vs restCAF fiber orientation variance from Mathematica, old Keyence 20x images (7 vs 8 samples).
+
+# load packages
+```{r}
+library(ggplot2)
+library(ggpubr)
+```
+
+# per-sample variances and tests
+```{r, fig.width=6, fig.height=6}
+# per-sample fiber orientation variances from Mathematica (rad^2)
+proVariances <- c(0.657998, 0.618538, 0.51705, 0.772362, 0.407781, 0.583037, 0.589696)
+
+restVariances <- c(0.66782, 0.465514, 0.457228, 0.42473, 0.391601, 0.466767, 0.452664,0.430305)
+
+# T-test (unweighted, n=7 vs n=8)
+t.test(proVariances, restVariances)
+
+# Mann-Whitney test (non-parametric)
+wilcox.test(proVariances, restVariances)
+
+# Descriptive statistics
+cat("proCAF mean variance:", mean(proVariances), "\n")
+cat("restCAF mean variance:", mean(restVariances), "\n")
+cat("Difference:", mean(restVariances) - mean(proVariances), "\n")
+cat("Percent difference:", 100*(mean(restVariances) - mean(proVariances))/mean(proVariances), "%\n")
+
+# Effect size (Cohen's d)
+pooled_sd <- sqrt((var(proVariances) + var(restVariances))/2)
+cohens_d <- (mean(restVariances) - mean(proVariances)) / pooled_sd
+cat("Cohen's d:", cohens_d, "\n")
+
+# Box plot
+boxplot(list(proCAF=proVariances, restCAF=restVariances),
+        col=c("pink", "cyan"),
+        main="Within-Sample Fiber Orientation Variance",
+        ylab="Variance")
+
+# Prepare data
+data <- data.frame(
+  variance = c(proVariances, restVariances),
+  group = c(rep("proCAF", length(proVariances)), 
+            rep("restCAF", length(restVariances)))
+)
+
+# Create boxplot with significance
+ggboxplot(data, x = "group", y = "variance",
+          fill = "group", 
+          color = "group",  # Dots follow group color
+          palette = c("#C4366E", "#006666"),  # darker colors for boxes and dots
+          width = 0.4,
+          alpha = 0.3,  # Light fill for boxes
+          add = "jitter",
+          add.params = list(size = 2.5, alpha = 0.9),  # Darker, bigger dots
+          ylab = "Variance",
+          xlab = "",
+          title = "Within-Sample Fiber Orientation Variance") +
+  stat_compare_means(method = "t.test",
+                     label.x = 1.5, 
+                     label.y = 0.9) +
+  coord_cartesian(xlim = c(0.6, 2.4)) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```

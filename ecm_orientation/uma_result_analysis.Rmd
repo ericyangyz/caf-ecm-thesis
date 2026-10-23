@@ -1,0 +1,496 @@
+---
+title: "uma_result_analysis"
+output: pdf_document
+date: "2026-03-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Fiber orientation of the old Keyence images (UMA outputs in data/uma_outputs_1), proCAF vs restCAF.
+Writes the old_keyence_*.csv tables and fig01-fig11 pdfs to results/.
+
+## set directory
+```{r}
+proCAF_dir <- "./data/uma_outputs_1/proCAF"
+restCAF_dir <- "./data/uma_outputs_1/restCAF"
+output_dir <- "./data/uma_outputs_1"
+```
+
+## packages
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(readxl)      # cell-tracking metadata (donor coverage section)
+```
+
+## output folder
+All tables (.csv) and figures (.pdf) go to results/.
+```{r}
+RESULT_DIR <- "./results"
+dir.create(RESULT_DIR, showWarnings = FALSE, recursive = TRUE)
+```
+
+## merge files
+Merge each group's per-sample orientation csvs into one table.
+
+```{r}
+library(tidyverse)
+
+# directories
+proCAF_dir <- "./data/uma_outputs_1/proCAF"
+restCAF_dir <- "./data/uma_outputs_1/restCAF"
+output_dir <- "./data/uma_outputs_1"
+
+# UMA files use either a -90..+89 or a -89..+90 grid of 1-degree bins. -90 and +90 are the
+# same orientation (180 deg period), so fold -90 into +90 and join on angle, not row order.
+merge_orientation_csvs <- function(dir_path) {
+  files <- list.files(dir_path, pattern = "_orientation_distribution_processed\\.csv$", full.names = TRUE)
+  
+  merged <- NULL
+  
+  for (f in files) {
+    df <- read_csv(f, show_col_types = FALSE)
+    
+    # sample name = leading digits plus optional N/T
+    sample_name <- basename(f) %>% 
+      str_extract("^\\d+[NT]?")
+    
+    col_name <- paste0(sample_name, "_perc_occ")
+    
+    df <- df %>%
+      mutate(corrected_angles = if_else(corrected_angles == -90, 90, corrected_angles)) %>%
+      select(corrected_angles, !!col_name := perc_occvalue2sum_of_occvalue) %>%
+      arrange(corrected_angles)
+    
+    merged <- if (is.null(merged)) df else full_join(merged, df, by = "corrected_angles")
+    
+    message("Added: ", sample_name)
+  }
+  
+  merged <- merged %>% arrange(corrected_angles)
+  
+  # every file must land on the same -89..+90 grid
+  stopifnot(nrow(merged) == 180,
+            min(merged$corrected_angles) == -89,
+            max(merged$corrected_angles) == 90,
+            sum(is.na(merged)) == 0)
+  
+  return(merged)
+}
+```
+
+Run it for both groups.
+
+```{r}
+message("Processing proCAF...")
+proCAF_merged <- merge_orientation_csvs(proCAF_dir)
+write_csv(proCAF_merged, file.path(output_dir, "proCAF_merged_orientation.csv"))
+
+message("\nProcessing restCAF...")
+restCAF_merged <- merge_orientation_csvs(restCAF_dir)
+write_csv(restCAF_merged, file.path(output_dir, "restCAF_merged_orientation.csv"))
+
+message("\nDone!")
+```
+Read the merged tables back and check them.
+```{r}
+proCAF_merged <- read_csv("./data/uma_outputs_1/proCAF_merged_orientation.csv")
+restCAF_merged <- read_csv("./data/uma_outputs_1/restCAF_merged_orientation.csv")
+head(proCAF_merged)
+head(restCAF_merged)
+```
+## plots
+Per-sample orientation distributions, one plot per group.
+
+```{r}
+# proCAF
+proCAF_long <- proCAF_merged %>%
+  pivot_longer(cols = -corrected_angles, 
+               names_to = "sample", 
+               values_to = "perc_occ") %>%
+  mutate(sample = str_remove(sample, "_perc_occ"))
+
+n_pro <- length(unique(proCAF_long$sample))
+pro_colors <- colorRampPalette(c("#FFB6C1", "#FE46A5", "#C71585"))(n_pro)
+
+p_pro <- ggplot(proCAF_long, aes(x = corrected_angles, y = perc_occ, color = sample)) +
+  geom_line(linewidth = 0.8, alpha = 0.8) +
+  scale_color_manual(values = pro_colors) +
+  labs(x = "Corrected Angle (°)", 
+       y = "Percentage Occurrence", 
+       title = "proCAF Orientation Distribution",
+       color = "Sample") +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "right")
+
+# restCAF
+restCAF_long <- restCAF_merged %>%
+  pivot_longer(cols = -corrected_angles, 
+               names_to = "sample", 
+               values_to = "perc_occ") %>%
+  mutate(sample = str_remove(sample, "_perc_occ"))
+n_rest <- length(unique(restCAF_long$sample))
+rest_colors <- colorRampPalette(c("#40E0D0", "#008080", "#004D4D"))(n_rest)
+
+p_rest <- ggplot(restCAF_long, aes(x = corrected_angles, y = perc_occ, color = sample)) +
+  geom_line(linewidth = 0.8, alpha = 0.8) +
+  scale_color_manual(values = rest_colors) +
+  labs(x = "Corrected Angle (°)", 
+       y = "Percentage Occurrence", 
+       title = "restCAF Orientation Distribution",
+       color = "Sample") +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "right")
+
+p_pro
+p_rest
+
+```
+
+Group averages, then both groups on one plot.
+
+```{r}
+# proCAF average
+proCAF_avg <- proCAF_long %>%
+  group_by(corrected_angles) %>%
+  summarise(avg_perc_occ = mean(perc_occ))
+
+p_pro_avg <- ggplot(proCAF_avg, aes(x = corrected_angles, y = avg_perc_occ)) +
+  geom_line(color = "#FE46A5", linewidth = 1) +
+  labs(x = "Corrected Angle (°)", 
+       y = "Average Percentage Occurrence", 
+       title = "proCAF Average Orientation Distribution") +
+  theme_classic(base_size = 12)
+
+# restCAF average
+restCAF_avg <- restCAF_long %>%
+  group_by(corrected_angles) %>%
+  summarise(avg_perc_occ = mean(perc_occ))
+
+p_rest_avg <- ggplot(restCAF_avg, aes(x = corrected_angles, y = avg_perc_occ)) +
+  geom_line(color = "#008080", linewidth = 1) +
+  labs(x = "Corrected Angle (°)", 
+       y = "Average Percentage Occurrence", 
+       title = "restCAF Average Orientation Distribution") +
+  theme_classic(base_size = 12)
+
+p_pro_avg
+p_rest_avg
+```
+
+```{r}
+both_avg <- bind_rows(
+  proCAF_avg %>% mutate(group = "proCAF"),
+  restCAF_avg %>% mutate(group = "restCAF")
+)
+
+p_both <- ggplot(both_avg, aes(x = corrected_angles, y = avg_perc_occ, color = group)) +
+  geom_line(linewidth = 1) +
+  scale_color_manual(values = c("proCAF" = "#FE46A5", "restCAF" = "#008080")) +
+  labs(x = "Corrected Angle (°)", 
+       y = "Average Percentage Occurrence", 
+       title = "proCAF vs restCAF Orientation Distribution",
+       color = "Group") +
+  theme_classic(base_size = 12)
+
+p_both
+
+setwd("./figure")
+ggsave("aa_together_orientation_dist_avg.png", p_both, width = 8, height = 5)
+```
+
+Histogram and step versions, to resemble the Mathematica plots.
+```{r}
+p_both_hist <- ggplot(both_avg, aes(x = corrected_angles, y = avg_perc_occ, fill = group)) +
+  geom_col(position = "identity", alpha = 0.5, width = 1) +
+  scale_fill_manual(values = c("proCAF" = "#FE46A5", "restCAF" = "#008080")) +
+  labs(x = "Corrected Angle (°)", 
+       y = "Average Percentage Occurrence", 
+       title = "proCAF vs restCAF Orientation Distribution",
+       fill = "Group") +
+  theme_classic(base_size = 12)
+
+p_both_hist
+```
+
+```{r}
+p_both_step <- ggplot(both_avg, aes(x = corrected_angles, y = avg_perc_occ, 
+                                     color = group, fill = group)) +
+  geom_area(position = "identity", alpha = 0.3) +
+  geom_step(linewidth = 0.8) +
+  scale_color_manual(values = c("proCAF" = "#FE46A5", "restCAF" = "#008080")) +
+  scale_fill_manual(values = c("proCAF" = "#FE46A5", "restCAF" = "#008080")) +
+  labs(x = "Corrected Angle (°)", 
+       y = "Average Percentage Occurrence", 
+       title = "proCAF vs restCAF Orientation Distribution",
+       color = "Group", fill = "Group") +
+  theme_classic(base_size = 12)
+
+p_both_step
+```
+
+## statistical analysis
+
+### alignment statistics per sample
+w = perc_occvalue2sum_of_occvalue (% of fiber signal per 1-degree bin, sums to 100);
+ang = corrected_angles (UMA puts each sample's dominant direction at 0; -89 to +90 deg).
+
+| statistic | formula | units, range |
+|---|---|---|
+| mean_angle_deg | sum(w*ang)/sum(w) | deg, -90 to +90; near 0 |
+| var_around_0_deg2 | sum(w*ang^2)/sum(w) | deg^2, 0 to 2700 |
+| sd_around_0_deg | sqrt(var_around_0_deg2) | deg, 0 = parallel fibers, 51.96 = random |
+| circular_variance | 1 - Mod(sum(w*exp(2i*ang))/sum(w)) | 0 = parallel, 1 = random |
+| circular_sd_deg | rad2deg(sqrt(-2*log(r))/2) | deg, 0 to infinity (diverges as r -> 0) |
+| perc_within_15deg | sum(w[abs(ang) <= 15]) | %, 0 to 100; UMA's own headline number |
+
+The spread is taken around 0, not the sample's mean angle, since 0 is already the dominant
+direction (908: 36.6 deg around 0 vs 32.2 deg centered). circular_variance saturates, so it is
+reported next to sd_around_0_deg, not instead of it.
+
+```{r}
+# one long table with both groups
+both_long <- bind_rows(
+  proCAF_long  %>% mutate(group = "proCAF"),
+  restCAF_long %>% mutate(group = "restCAF")
+)
+
+# per-sample alignment statistics (table above)
+align_stats <- both_long %>%
+  group_by(group, sample) %>%
+  summarise(
+    total_perc        = sum(perc_occ),                                    # sanity, must be 100
+    mean_angle_deg    = sum(perc_occ * corrected_angles) / sum(perc_occ),
+    var_around_0_deg2 = sum(perc_occ * corrected_angles^2) / sum(perc_occ),
+    sd_around_0_deg   = sqrt(var_around_0_deg2),
+    r_resultant       = Mod(sum(perc_occ * exp(2i * corrected_angles * pi / 180)) / sum(perc_occ)),
+    circular_variance = 1 - r_resultant,
+    circular_sd_deg   = (180 / pi) * sqrt(-2 * log(r_resultant)) / 2,
+    perc_within_15deg = sum(perc_occ[abs(corrected_angles) <= 15]),
+    perc_within_30deg = sum(perc_occ[abs(corrected_angles) <= 30]),
+    peak_angle_deg    = corrected_angles[which.max(perc_occ)],
+    .groups = "drop"
+  ) %>%
+  arrange(group, sd_around_0_deg)
+
+# weights must sum to 100 per sample
+stopifnot(all(abs(align_stats$total_perc - 100) < 1e-6))
+
+# sd_around_0_deg of a uniform (random) matrix
+uniform_sd <- sqrt(mean((-89:90)^2))
+cat(sprintf("uniform (random) matrix reference: sd_around_0_deg = %.2f deg\n", uniform_sd))
+
+align_stats %>% select(group, sample, sd_around_0_deg, circular_variance, perc_within_15deg)
+```
+
+### cross-check against UMA's own output
+
+perc_within_15deg, recomputed from the merged distributions, must equal UMA's
+Percentage_Fibers_Aligned_Within_15_Degree in Alignment_Summary.csv.
+
+```{r}
+uma_reported <- bind_rows(
+  read_csv(file.path(proCAF_dir,  "Alignment_Summary.csv"), show_col_types = FALSE) %>% mutate(group = "proCAF"),
+  read_csv(file.path(restCAF_dir, "Alignment_Summary.csv"), show_col_types = FALSE) %>% mutate(group = "restCAF")
+) %>%
+  transmute(group,
+            sample = str_extract(File_Name, "^\\d+[NT]?"),
+            uma_within15 = Percentage_Fibers_Aligned_Within_15_Degree,
+            uma_call = Orientation_Mode)
+
+align_stats <- align_stats %>% left_join(uma_reported, by = c("group", "sample"))
+
+stopifnot(sum(is.na(align_stats$uma_within15)) == 0,
+          max(abs(align_stats$perc_within_15deg - align_stats$uma_within15)) < 1e-6)
+cat("cross-check passed: recomputed perc_within_15deg matches UMA's Alignment_Summary.csv exactly\n")
+```
+
+### which of these 15 matrices were also used in the cell-tracking experiment?
+
+Old file names carry only MMDD plus N/T (804N#1, 1108_2_J); tracking_metadata.xlsx uses the
+full cfECM donor (P220804N1). Each mapped donor must exist there with a matching cafType.
+
+```{r}
+TRACK_META <- "./data/data_tracking/analysis/tracking_metadata.xlsx"
+track_meta <- read_excel(TRACK_META)
+
+# old label -> cfECM donor; NA = not imaged in the tracking experiment
+sample_to_donor <- tribble(
+  ~sample,  ~donor,
+  "015",    "P201015T1",
+  "1207T",  "P231207T1",
+  "229T",   "P240229T1",
+  "804N",   "P220804N1",
+  "804T",   "P220804T1",
+  "815",    "P220815T1",
+  "908",    "P220908N1",
+  "0118N",  NA,
+  "1108",   "P221108T1",
+  "201N",   "P220201N1",
+  "212",    "P220212T1",
+  "509",    NA,
+  "519",    "P220519T1",
+  "711",    "P240711N1",
+  "807",    "P140807T1"
+)
+
+align_stats <- align_stats %>% left_join(sample_to_donor, by = "sample")
+stopifnot(nrow(align_stats) == 15, sum(is.na(align_stats$sample)) == 0)
+
+donor_caf <- track_meta %>% distinct(cfECM, cafType)
+
+# check 1: every mapped donor exists in the tracking metadata
+mapped <- align_stats %>% filter(!is.na(donor))
+stopifnot(all(mapped$donor %in% donor_caf$cfECM))
+
+# check 2: the CAF call agrees between the two experiments
+chk <- mapped %>% left_join(donor_caf, by = c("donor" = "cfECM"))
+stopifnot(all(chk$group == chk$cafType))
+cat(sprintf("mapping checked: %d of 15 old samples map to a tracking donor, all cafType calls agree\n",
+            nrow(mapped)))
+
+# coverage, seen from the tracking side
+coverage <- donor_caf %>%
+  rename(donor = cfECM) %>%
+  left_join(align_stats %>% select(donor, sample, sd_around_0_deg, circular_variance, perc_within_15deg),
+            by = "donor") %>%
+  mutate(has_old_image = !is.na(sample)) %>%
+  arrange(cafType, desc(has_old_image), donor)
+
+coverage
+cat(sprintf("\ntracking donors covered by an old Keyence image: %d of %d (%d proCAF of %d, %d restCAF of %d)\n",
+            sum(coverage$has_old_image), nrow(coverage),
+            sum(coverage$has_old_image & coverage$cafType == "proCAF"),  sum(coverage$cafType == "proCAF"),
+            sum(coverage$has_old_image & coverage$cafType == "restCAF"), sum(coverage$cafType == "restCAF")))
+cat("old samples with no tracking counterpart: ",
+    paste(align_stats$sample[is.na(align_stats$donor)], collapse = ", "), "\n")
+cat("tracking donors with no old image: ",
+    paste(coverage$donor[!coverage$has_old_image], collapse = ", "), "\n")
+
+align_stats <- align_stats %>% arrange(group, sd_around_0_deg)
+write_csv(align_stats, file.path(RESULT_DIR, "old_keyence_alignment_per_sample.csv"))
+write_csv(coverage,    file.path(RESULT_DIR, "old_keyence_tracking_donor_coverage.csv"))
+```
+
+### is restCAF matrix more aligned than proCAF matrix?
+
+Welch t-test and Wilcoxon rank-sum, on all 15 samples and on the 13 with tracking data.
+One image per donor, so n counts donors (7 vs 8).
+
+```{r}
+group_tests <- bind_rows(
+  lapply(c("sd_around_0_deg", "circular_variance", "perc_within_15deg"), function(m) {
+    bind_rows(
+      lapply(list(all15 = align_stats, tracked13 = filter(align_stats, !is.na(donor))), function(d) {
+        a <- d[[m]][d$group == "proCAF"]
+        b <- d[[m]][d$group == "restCAF"]
+        tt <- t.test(a, b)
+        wt <- suppressWarnings(wilcox.test(a, b))
+        tibble(metric = m, n_pro = length(a), n_rest = length(b),
+               mean_pro = mean(a), mean_rest = mean(b), diff_pro_minus_rest = mean(a) - mean(b),
+               t = unname(tt$statistic), p_ttest = tt$p.value, p_wilcoxon = wt$p.value)
+      }), .id = "subset")
+  })
+) %>% relocate(subset, .after = metric)
+
+group_tests
+write_csv(group_tests, file.path(RESULT_DIR, "old_keyence_group_tests.csv"))
+```
+
+### figures
+
+```{r, fig.width=7, fig.height=5}
+var_comparison <- align_stats %>%
+  mutate(group = factor(group, levels = c("proCAF", "restCAF")),
+         grp   = factor(paste0(group, "\n(n = ", ifelse(group == "proCAF", 7, 8), ")"),
+                        levels = c("proCAF\n(n = 7)", "restCAF\n(n = 8)")))
+
+# Welch p per metric, taken from group_tests
+p_all15 <- group_tests %>% filter(subset == "all15") %>% select(metric, p_ttest) %>% deframe()
+
+p_sd <- ggplot(var_comparison, aes(grp, sd_around_0_deg, fill = group)) +
+  geom_boxplot(alpha = 0.3, outlier.shape = NA, width = 0.4) +
+  geom_jitter(aes(color = group), width = 0.12, size = 2.5, alpha = 0.9) +
+  geom_hline(yintercept = uniform_sd, linetype = "dashed", color = "grey50") +
+  annotate("text", x = 1.5, y = uniform_sd - 2, size = 3, color = "grey40",
+           label = sprintf("%.1f\u00b0 = random matrix", uniform_sd)) +
+  annotate("text", x = 1.5, y = uniform_sd + 2.6, size = 3.1,
+           label = sprintf("Welch's t-test, p = %.3f", p_all15[["sd_around_0_deg"]])) +
+  scale_fill_manual(values = c(proCAF = "#C4366E", restCAF = "#006666")) +
+  scale_color_manual(values = c(proCAF = "#C4366E", restCAF = "#006666")) +
+  coord_cartesian(ylim = c(0, uniform_sd + 4)) +
+  labs(x = NULL, y = "SD around dominant direction (degrees)",
+       title = "Fiber orientation spread, old Keyence images") +
+  theme_classic(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "none")
+
+p_cv <- ggplot(var_comparison, aes(grp, circular_variance, fill = group)) +
+  geom_boxplot(alpha = 0.3, outlier.shape = NA, width = 0.4) +
+  geom_jitter(aes(color = group), width = 0.12, size = 2.5, alpha = 0.9) +
+  annotate("text", x = 1.5, y = 0.97, size = 3.1,
+           label = sprintf("Welch's t-test, p = %.3f", p_all15[["circular_variance"]])) +
+  scale_fill_manual(values = c(proCAF = "#C4366E", restCAF = "#006666")) +
+  scale_color_manual(values = c(proCAF = "#C4366E", restCAF = "#006666")) +
+  coord_cartesian(ylim = c(0, 1)) +
+  labs(x = NULL, y = "Circular variance (0 = parallel, 1 = random)",
+       title = "Circular variance, old Keyence images") +
+  theme_classic(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "none")
+
+p_w15 <- ggplot(var_comparison, aes(grp, perc_within_15deg, fill = group)) +
+  geom_boxplot(alpha = 0.3, outlier.shape = NA, width = 0.4) +
+  geom_jitter(aes(color = group), width = 0.12, size = 2.5, alpha = 0.9) +
+  annotate("text", x = 1.5, y = 97, size = 3.1,
+           label = sprintf("Welch's t-test, p = %.3f", p_all15[["perc_within_15deg"]])) +
+  scale_fill_manual(values = c(proCAF = "#C4366E", restCAF = "#006666")) +
+  scale_color_manual(values = c(proCAF = "#C4366E", restCAF = "#006666")) +
+  coord_cartesian(ylim = c(0, 100)) +
+  labs(x = NULL, y = "Fibers within 15\u00b0 of dominant direction (%)",
+       title = "Percent aligned within 15\u00b0, old Keyence images") +
+  theme_classic(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "none")
+
+p_sd
+p_cv
+p_w15
+```
+
+Per sample, sorted; labels show which samples have tracking data.
+
+```{r, fig.width=8, fig.height=5}
+p_bysample <- align_stats %>%
+  mutate(label = ifelse(is.na(donor), paste0(sample, " (no tracking)"), paste0(sample, " = ", donor)),
+         label = factor(label, levels = label[order(sd_around_0_deg)])) %>%
+  ggplot(aes(x = label, y = sd_around_0_deg, fill = group)) +
+  geom_col(width = 0.7) +
+  geom_hline(yintercept = uniform_sd, linetype = "dashed", color = "grey50") +
+  scale_fill_manual(values = c("proCAF" = "#FE46A5", "restCAF" = "#008080")) +
+  labs(x = "", y = "SD around dominant direction (degrees)",
+       title = "Per-sample fiber alignment, old Keyence images",
+       subtitle = sprintf("dashed line = %.1f°, a completely random matrix", uniform_sd)) +
+  coord_flip() +
+  theme_classic(base_size = 12)
+
+p_bysample
+```
+
+```{r}
+# save all figures
+ggsave(file.path(RESULT_DIR, "fig01_proCAF_orientation_per_sample.pdf"),  p_pro,      width = 8, height = 5)
+ggsave(file.path(RESULT_DIR, "fig02_restCAF_orientation_per_sample.pdf"), p_rest,     width = 8, height = 5)
+ggsave(file.path(RESULT_DIR, "fig03_proCAF_orientation_average.pdf"),     p_pro_avg,  width = 8, height = 5)
+ggsave(file.path(RESULT_DIR, "fig04_restCAF_orientation_average.pdf"),    p_rest_avg, width = 8, height = 5)
+ggsave(file.path(RESULT_DIR, "fig05_both_orientation_average_line.pdf"),  p_both,     width = 8, height = 5)
+ggsave(file.path(RESULT_DIR, "fig06_both_orientation_average_hist.pdf"),  p_both_hist, width = 8, height = 5)
+ggsave(file.path(RESULT_DIR, "fig07_both_orientation_average_step.pdf"),  p_both_step, width = 8, height = 5)
+ggsave(file.path(RESULT_DIR, "fig08_sd_around_0_by_group.pdf"),           p_sd,       width = 6, height = 6)
+ggsave(file.path(RESULT_DIR, "fig09_circular_variance_by_group.pdf"),     p_cv,       width = 6, height = 6)
+ggsave(file.path(RESULT_DIR, "fig10_perc_within_15deg_by_group.pdf"),     p_w15,      width = 6, height = 6)
+ggsave(file.path(RESULT_DIR, "fig11_sd_around_0_per_sample.pdf"),         p_bysample, width = 8, height = 5)
+
+cat("\nwritten to", RESULT_DIR, ":\n")
+cat(paste0("  ", sort(list.files(RESULT_DIR)), collapse = "\n"), "\n")
+```
